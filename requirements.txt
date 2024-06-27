@@ -4,3 +4,5 @@ pygments
 tavily-python
 python-dotenv
 Pillow
+beautifulsoup4
+PyPDF2

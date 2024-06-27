@@ -7,6 +7,7 @@ from pygments import highlight
 from pygments.lexers import get_lexer_by_name
 from pygments.formatters import TerminalFormatter
 import pygments.util
+from bs4 import BeautifulSoup
 
 # Color constants
 USER_COLOR = Fore.WHITE
@@ -50,15 +51,47 @@ def write_to_file(path, content):
         return f"Error writing to file: {str(e)}"
 
 def read_file(path):
+    def is_html(content, file_extension):
+        html_extensions = ['.html', '.htm', '.xhtml']
+        return (file_extension.lower() in html_extensions or
+                content.strip().startswith('<!DOCTYPE html>') or
+                content.strip().startswith('<html'))
+
+    def read_pdf(pdf_path):
+        with open(pdf_path, 'rb') as file:
+            reader = PyPDF2.PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+        return text
+
     try:
+        file_name, file_extension = os.path.splitext(path)
+        
+        if file_extension.lower() == '.pdf':
+            pdf_content = read_pdf(path)
+            return f"PDF content detected. Extracted text:\n\n{pdf_content}"
+
         with open(path, 'r', encoding='utf-8') as f:
             content = f.read()
+        
+        if is_html(content, file_extension):
+            soup = BeautifulSoup(content, 'html.parser')
+            text_content = soup.get_text(separator='\n', strip=True)
+            return f"HTML content detected. Extracted text:\n\n{text_content}"
+        
         return content
     except UnicodeDecodeError:
         try:
             # If UTF-8 fails, try with ISO-8859-1 encoding
             with open(path, 'r', encoding='iso-8859-1') as f:
                 content = f.read()
+            
+            if is_html(content, file_extension):
+                soup = BeautifulSoup(content, 'html.parser')
+                text_content = soup.get_text(separator='\n', strip=True)
+                return f"HTML content detected. Extracted text:\n\n{text_content}"
+            
             return content
         except Exception as e:
             return f"Error reading file: {str(e)}"

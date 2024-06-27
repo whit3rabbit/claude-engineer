@@ -20,6 +20,8 @@ setup(
         "tavily-python",
         "python-dotenv",
         "Pillow",
+        "beautifulsoup4",
+        "PyPDF2",
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
