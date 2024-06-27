@@ -138,6 +138,21 @@ tools = [
     }
 ]
 
+def check_api_keys():
+    missing_keys = []
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        missing_keys.append("ANTHROPIC_API_KEY")
+    if not os.getenv("TAVILY_API_KEY"):
+        missing_keys.append("TAVILY_API_KEY")
+    
+    if missing_keys:
+        print_colored("Warning: The following API keys were not found in the environment:", TOOL_COLOR)
+        for key in missing_keys:
+            print_colored(f"  - {key}", TOOL_COLOR)
+        print_colored("Please set these environment variables or add them to your .env file.", TOOL_COLOR)
+        return False
+    return True
+
 def execute_tool(tool_name, tool_input):
     if tool_name == "create_folder":
         return create_folder(tool_input["path"])
@@ -155,6 +170,9 @@ def execute_tool(tool_name, tool_input):
         return f"Unknown tool: {tool_name}"
 
 def chat_with_claude(user_input, image_path=None):
+    if not check_api_keys():
+        return "Error: Missing API keys. Please set the required environment variables."
+
     global conversation_history
     
     if image_path:
@@ -255,6 +273,9 @@ def chat_with_claude(user_input, image_path=None):
     return assistant_response
 
 def main():
+    if not check_api_keys():
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(description="Claude Engineer - Interact with Claude AI from the command line")
     parser.add_argument("--interactive", action="store_true", help="Start an interactive chat session")
     parser.add_argument("--query", type=str, help="Send a single query to Claude")
@@ -280,6 +301,10 @@ def main():
         sys.exit(1)
 
 def interactive_mode():
+    if not check_api_keys():
+        print_colored("Error: Missing API keys. Please set the required environment variables.", TOOL_COLOR)
+        return
+
     print_colored("Welcome to the Claude-3.5-Sonnet Engineer Chat with Image Support!", CLAUDE_COLOR)
     print_colored("Type 'exit' to end the conversation.", CLAUDE_COLOR)
     print_colored("To include an image, type 'image' and press enter. Then enter the path to the image file.", CLAUDE_COLOR)
