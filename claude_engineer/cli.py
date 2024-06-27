@@ -7,7 +7,7 @@ from tavily import TavilyClient
 from colorama import init, Style
 
 # Import helper functions and constants
-from utils import (
+from .utils import (
     print_colored, print_code, create_folder, create_file,
     write_to_file, read_file, list_files, encode_image_to_base64,
     USER_COLOR, CLAUDE_COLOR, TOOL_COLOR, RESULT_COLOR
