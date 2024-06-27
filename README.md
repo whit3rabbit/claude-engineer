@@ -10,46 +10,108 @@ Claude Engineer is an interactive command-line interface (CLI) that leverages th
 - Syntax highlighting for code snippets
 - Project structure creation and management
 - Code analysis and improvement suggestions
-- Vision capabilities support for via drag and drop of images in the terminal
+- Vision capabilities support via drag and drop of images in the terminal
 
 ## Installation
 
-1. Clone this repository:
+Since Claude Engineer is not currently available in the PyPI repository, you need to install it directly from the source:
+
+1. Clone the repository:
    ```
    git clone https://github.com/Doriandarko/claude-engineer.git
    cd claude-engineer
    ```
 
-2. Install the required dependencies:
+2. Install the package:
    ```
-   pip install -r requirements.txt
+   pip install .
    ```
 
-3. Set up your API keys:
-   - Add your Anthropic and Tavily API keys at the start of the file:
-     ```
-     client = Anthropic(api_key="YOUR API KEY")
-     tavily = TavilyClient(api_key="YOUR API KEY")
-     ```
+## Configuration
+
+Before using Claude Engineer, you need to set up your API keys. You can do this either by setting environment variables or by using a `.env` file.
+
+### Setting Environment Variables
+
+#### Windows (Command Prompt)
+```
+set ANTHROPIC_API_KEY=your_anthropic_api_key_here
+set TAVILY_API_KEY=your_tavily_api_key_here
+```
+
+#### Windows (PowerShell)
+```
+$env:ANTHROPIC_API_KEY="your_anthropic_api_key_here"
+$env:TAVILY_API_KEY="your_tavily_api_key_here"
+```
+
+#### Linux/macOS
+```
+export ANTHROPIC_API_KEY=your_anthropic_api_key_here
+export TAVILY_API_KEY=your_tavily_api_key_here
+```
+
+Replace `your_anthropic_api_key_here` and `your_tavily_api_key_here` with your actual API keys.
+
+### Using a .env File
+
+Alternatively, you can create a `.env` file in your project directory:
+
+1. Create a file named `.env` in your project directory.
+2. Add your Anthropic and Tavily API keys to the `.env` file:
+
+```
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+TAVILY_API_KEY=your_tavily_api_key_here
+```
 
 ## Usage
 
-Run the main script to start the Claude Engineer interface:
+To start the Claude Engineer interface in interactive mode, run:
 
 ```
-python main.py
+claude-engineer --interactive
 ```
 
-Once started, you can interact with Claude Engineer by typing your queries or commands. Some example interactions:
+You can also send a single query without entering interactive mode:
 
-- "Create a new Python project structure for a web application"
-- "Explain the code in file.py and suggest improvements"
-- "Search for the latest best practices in React development"
-- "Help me debug this error: [paste your error message]"
+```
+claude-engineer --query "Your query here"
+```
 
-Type 'exit' to end the conversation and close the application.
+To analyze an image along with your query:
 
-Note: Claude will only have access to the files in the root folders of the script or any folder path you provide it.
+```
+claude-engineer --query "Describe this image" --image /path/to/your/image.jpg
+```
+
+## Available Tools
+
+Claude Engineer provides several tools to assist with various tasks:
+
+1. **create_folder**: Create a new folder at the specified path.
+   Example: "Create a new folder called 'project' in the current directory."
+
+2. **create_file**: Create a new file at the specified path with optional content.
+   Example: "Create a new file called 'main.py' in the 'project' folder with a simple 'Hello, World!' program."
+
+3. **write_to_file**: Write content to an existing file at the specified path.
+   Example: "Add a new function to calculate factorial in the 'main.py' file."
+
+4. **read_file**: Read the contents of a file at the specified path.
+   Example: "Show me the contents of the 'main.py' file."
+
+5. **list_files**: List all files and directories in the specified path.
+   Example: "List all files in the current directory."
+
+6. **tavily_search**: Perform a web search using Tavily API.
+   Example: "Search for the latest best practices in Python web development."
+
+To use these tools, simply describe your task in natural language, and Claude Engineer will interpret your request and use the appropriate tool.
+
+## Image Analysis
+
+You can also use Claude Engineer to analyze images. In interactive mode, type 'image' and press enter, then provide the path to your image file. Follow up with a prompt describing what you want to know about the image.
 
 ## Contributing
 
