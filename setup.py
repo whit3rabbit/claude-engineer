@@ -35,7 +35,7 @@ setup(
     python_requires=">=3.7",
     entry_points={
         "console_scripts": [
-            "claude-engineer=claude_engineer.main:main",
+            "claude-engineer=claude_engineer.cli:main",
         ],
     },
 )
