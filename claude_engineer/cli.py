@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 from tavily import TavilyClient
 from colorama import init, Style
+import signal
 
 # Import helper functions and constants
 from .utils import (
@@ -272,21 +273,25 @@ def chat_with_claude(user_input, image_path=None):
     
     return assistant_response
 
+def graceful_exit(signum, frame):
+    print_colored("\nExiting Claude Engineer. Goodbye!", CLAUDE_COLOR)
+    sys.exit(0)
+
 def main():
     if not check_api_keys():
         sys.exit(1)
 
     parser = argparse.ArgumentParser(description="Claude Engineer - Interact with Claude AI from the command line")
-    parser.add_argument("--interactive", action="store_true", help="Start an interactive chat session")
     parser.add_argument("--query", type=str, help="Send a single query to Claude")
     parser.add_argument("--image", type=str, help="Path to an image file to analyze")
     
     args = parser.parse_args()
     
+    # Set up signal handler for graceful exit
+    signal.signal(signal.SIGINT, graceful_exit)
+    
     try:
-        if args.interactive:
-            interactive_mode()
-        elif args.query:
+        if args.query:
             if args.image:
                 if not os.path.isfile(args.image):
                     raise FileNotFoundError(f"Image file not found: {args.image}")
@@ -295,7 +300,7 @@ def main():
                 response = chat_with_claude(args.query)
             print(response)
         else:
-            parser.print_help()
+            interactive_mode()
     except Exception as e:
         print_colored(f"An error occurred: {str(e)}", TOOL_COLOR)
         sys.exit(1)
@@ -306,52 +311,55 @@ def interactive_mode():
         return
 
     print_colored("Welcome to the Claude-3.5-Sonnet Engineer Chat with Image Support!", CLAUDE_COLOR)
-    print_colored("Type 'exit' to end the conversation.", CLAUDE_COLOR)
+    print_colored("Type 'exit' or press Ctrl+C to end the conversation.", CLAUDE_COLOR)
     print_colored("To include an image, type 'image' and press enter. Then enter the path to the image file.", CLAUDE_COLOR)
     
     while True:
-        user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
-        
-        if user_input.lower() == 'exit':
-            print_colored("Thank you for chatting. Goodbye!", CLAUDE_COLOR)
-            break
-        
-        if user_input.lower() == 'image':
-            image_path = input(f"{USER_COLOR}Enter the path to your image file: {Style.RESET_ALL}").strip()
+        try:
+            user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
             
-            if os.path.isfile(image_path):
-                user_input = input(f"{USER_COLOR}You (prompt for image): {Style.RESET_ALL}")
-                response = chat_with_claude(user_input, image_path)
+            if user_input.lower() == 'exit':
+                print_colored("Thank you for chatting. Goodbye!", CLAUDE_COLOR)
+                break
+            
+            if user_input.lower() == 'image':
+                image_path = input(f"{USER_COLOR}Enter the path to your image file: {Style.RESET_ALL}").strip()
+                
+                if os.path.isfile(image_path):
+                    user_input = input(f"{USER_COLOR}You (prompt for image): {Style.RESET_ALL}")
+                    response = chat_with_claude(user_input, image_path)
+                else:
+                    print_colored("Invalid image path. Please try again.", CLAUDE_COLOR)
+                    continue
             else:
-                print_colored("Invalid image path. Please try again.", CLAUDE_COLOR)
-                continue
-        else:
-            response = chat_with_claude(user_input)
-        
-        if response.startswith("Error") or response.startswith("I'm sorry"):
-            print_colored(response, TOOL_COLOR)
-        else:
-            # Check if the response contains code and format it
-            if "```" in response:
-                parts = response.split("```")
-                for i, part in enumerate(parts):
-                    if i % 2 == 0:
-                        print_colored(part, CLAUDE_COLOR)
-                    else:
-                        lines = part.split('\n')
-                        language = lines[0].strip() if lines else ""
-                        code = '\n'.join(lines[1:]) if len(lines) > 1 else ""
-                        
-                        if language and code:
-                            print_code(code, language)
-                        elif code:
-                            # If no language is specified but there is code, print it as plain text
-                            print_colored(f"Code:\n{code}", CLAUDE_COLOR)
-                        else:
-                            # If there's no code (empty block), just print the part as is
+                response = chat_with_claude(user_input)
+            
+            if response.startswith("Error") or response.startswith("I'm sorry"):
+                print_colored(response, TOOL_COLOR)
+            else:
+                # Check if the response contains code and format it
+                if "```" in response:
+                    parts = response.split("```")
+                    for i, part in enumerate(parts):
+                        if i % 2 == 0:
                             print_colored(part, CLAUDE_COLOR)
-            else:
-                print_colored(response, CLAUDE_COLOR)
+                        else:
+                            lines = part.split('\n')
+                            language = lines[0].strip() if lines else ""
+                            code = '\n'.join(lines[1:]) if len(lines) > 1 else ""
+                            
+                            if language and code:
+                                print_code(code, language)
+                            elif code:
+                                # If no language is specified but there is code, print it as plain text
+                                print_colored(f"Code:\n{code}", CLAUDE_COLOR)
+                            else:
+                                # If there's no code (empty block), just print the part as is
+                                print_colored(part, CLAUDE_COLOR)
+                else:
+                    print_colored(response, CLAUDE_COLOR)
+        except KeyboardInterrupt:
+            graceful_exit(None, None)
 
 if __name__ == "__main__":
     main()
