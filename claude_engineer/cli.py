@@ -1,8 +1,9 @@
 import os
 import argparse
 import sys
+import json
 from dotenv import load_dotenv
-from anthropic import Anthropic
+from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 from tavily import TavilyClient
 from colorama import init, Style
 import signal
@@ -11,7 +12,7 @@ import signal
 from .utils import (
     print_colored, print_code, create_folder, create_file,
     write_to_file, read_file, list_files, encode_image_to_base64,
-    USER_COLOR, CLAUDE_COLOR, TOOL_COLOR, RESULT_COLOR
+    USER_COLOR, CLAUDE_COLOR, TOOL_COLOR, RESULT_COLOR, ERROR_COLOR
 )
 
 # Initialize colorama
@@ -19,6 +20,25 @@ init()
 
 # Load environment variables
 load_dotenv()
+
+# Initialize the Anthropic client
+client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# Initialize the Tavily client
+tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+
+# Set up the conversation memory
+conversation_history = []
+
+# Available Claude models
+CLAUDE_MODELS = {
+    "opus": "claude-3-opus-20240229",
+    "sonnet": "claude-3-sonnet-20240229",
+    "haiku": "claude-3-haiku-20240307"
+}
+
+# Default model
+DEFAULT_MODEL = "sonnet"
 
 # System prompt
 system_prompt = """
@@ -68,73 +88,94 @@ tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 # Set up the conversation memory
 conversation_history = []
 
-# Define the tools
+# Define the tools with correct input_schema
+# Define the tools with improved descriptions and structure
 tools = [
     {
-        "name": "create_folder",
-        "description": "Create a new folder at the specified path.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The path where the folder should be created"}
-            },
-            "required": ["path"]
-        }
-    },
-    {
-        "name": "create_file",
-        "description": "Create a new file at the specified path with optional content.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The path where the file should be created"},
-                "content": {"type": "string", "description": "The initial content of the file"}
-            },
-            "required": ["path"]
-        }
-    },
-    {
-        "name": "write_to_file",
-        "description": "Write content to an existing file at the specified path.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The path of the file to write to"},
-                "content": {"type": "string", "description": "The content to write to the file"}
-            },
-            "required": ["path", "content"]
-        }
-    },
-    {
-        "name": "read_file",
-        "description": "Read the contents of a file at the specified path.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The path of the file to read"}
-            },
-            "required": ["path"]
-        }
-    },
-    {
-        "name": "list_files",
-        "description": "List all files and directories in the specified path.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "The path of the folder to list (default: current directory)"}
+        "type": "function",
+        "function": {
+            "name": "create_folder",
+            "description": "Creates a new folder at the specified path. Use this tool when you need to organize files or create a new project structure. The tool will create any necessary parent directories if they don't exist. If the folder already exists, it will not overwrite it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "The full path where the folder should be created. Use forward slashes (/) for path separation, even on Windows systems."}
+                },
+                "required": ["path"]
             }
         }
     },
     {
-        "name": "tavily_search",
-        "description": "Perform a web search using Tavily API.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "The search query"}
-            },
-            "required": ["query"]
+        "type": "function",
+        "function": {
+            "name": "create_file",
+            "description": "Creates a new file at the specified path with optional content. Use this tool when you need to create a new file, such as a source code file, configuration file, or any text-based document. If the file already exists, it will be overwritten.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "The full path where the file should be created, including the filename and extension."},
+                    "content": {"type": "string", "description": "The initial content to write to the file. If not provided, an empty file will be created."}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_to_file",
+            "description": "Writes or appends content to an existing file at the specified path. Use this tool when you need to update the contents of a file, add new information, or overwrite existing content. If the file doesn't exist, it will be created.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "The full path of the file to write to, including the filename and extension."},
+                    "content": {"type": "string", "description": "The content to write to the file. This will overwrite any existing content in the file."},
+                    "mode": {"type": "string", "enum": ["w", "a"], "description": "The write mode: 'w' for write (overwrite), 'a' for append. Default is 'w'."}
+                },
+                "required": ["path", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Reads and returns the contents of a file at the specified path. Use this tool when you need to access the content of an existing file, such as to review code, check configuration settings, or analyze text data. This tool can handle various file types, including text files, source code, and even attempt to extract text from PDFs and HTML files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "The full path of the file to read, including the filename and extension."}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "Lists all files and directories in the specified path. Use this tool when you need to explore the contents of a directory, check for the existence of certain files, or get an overview of a project structure. It returns a list of file and directory names.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "The path of the folder to list. If not provided, it lists the contents of the current working directory."}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tavily_search",
+            "description": "Performs a web search using the Tavily API to find up-to-date information on a given query. Use this tool when you need current information, facts, or data that might not be in your training data. The search results can provide context for answering questions or solving problems.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query to send to the Tavily API."}
+                },
+                "required": ["query"]
+            }
         }
     }
 ]
@@ -160,7 +201,8 @@ def execute_tool(tool_name, tool_input):
     elif tool_name == "create_file":
         return create_file(tool_input["path"], tool_input.get("content", ""))
     elif tool_name == "write_to_file":
-        return write_to_file(tool_input["path"], tool_input["content"])
+        mode = tool_input.get("mode", "w")
+        return write_to_file(tool_input["path"], tool_input["content"], mode)
     elif tool_name == "read_file":
         return read_file(tool_input["path"])
     elif tool_name == "list_files":
@@ -168,9 +210,9 @@ def execute_tool(tool_name, tool_input):
     elif tool_name == "tavily_search":
         return tavily.search(query=tool_input["query"])
     else:
-        return f"Unknown tool: {tool_name}"
+        return f"Error: Unknown tool '{tool_name}'"
 
-def chat_with_claude(user_input, image_path=None):
+def chat_with_claude(user_input, image_path=None, model=DEFAULT_MODEL, tool_choice="auto"):
     if not check_api_keys():
         return "Error: Missing API keys. Please set the required environment variables."
 
@@ -181,7 +223,7 @@ def chat_with_claude(user_input, image_path=None):
         image_base64 = encode_image_to_base64(image_path)
         
         if image_base64.startswith("Error"):
-            print_colored(f"Error encoding image: {image_base64}", TOOL_COLOR)
+            print_colored(f"Error encoding image: {image_base64}", ERROR_COLOR)
             return "I'm sorry, there was an error processing the image. Please try again."
 
         image_message = {
@@ -210,62 +252,56 @@ def chat_with_claude(user_input, image_path=None):
     
     try:
         response = client.messages.create(
-            model="claude-3-5-sonnet-20240620",
+            model=CLAUDE_MODELS[model],
             max_tokens=4000,
-            system=system_prompt,
+            system=system_prompt, 
             messages=messages,
             tools=tools,
-            tool_choice={"type": "auto"}
+            tool_choice={"type": tool_choice} if tool_choice != "tool" else {"type": "function", "function": {"name": tool_choice}}
         )
     except Exception as e:
-        print_colored(f"Error calling Claude API: {str(e)}", TOOL_COLOR)
+        print_colored(f"Error calling Claude API: {str(e)}", ERROR_COLOR)
         return "I'm sorry, there was an error communicating with the AI. Please try again."
     
     assistant_response = ""
     
-    for content_block in response.content:
-        if content_block.type == "text":
-            assistant_response += content_block.text
-            print_colored(f"\nClaude: {content_block.text}", CLAUDE_COLOR)
-        elif content_block.type == "tool_use":
-            tool_name = content_block.name
-            tool_input = content_block.input
-            tool_use_id = content_block.id
+    for content in response.content:
+        if content.type == "text":
+            assistant_response += content.text
+            print_colored(f"\nClaude: {content.text}", CLAUDE_COLOR)
+        elif content.type == "tool_call":
+            tool_call = content.tool_call
+            tool_name = tool_call.function.name
+            tool_args = json.loads(tool_call.function.arguments)
             
             print_colored(f"\nTool Used: {tool_name}", TOOL_COLOR)
-            print_colored(f"Tool Input: {tool_input}", TOOL_COLOR)
+            print_colored(f"Tool Arguments: {tool_args}", TOOL_COLOR)
             
-            result = execute_tool(tool_name, tool_input)
+            result = execute_tool(tool_name, tool_args)
             print_colored(f"Tool Result: {result}", RESULT_COLOR)
             
-            conversation_history.append({"role": "assistant", "content": [content_block]})
+            conversation_history.append({"role": "assistant", "content": [content]})
             conversation_history.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": result
-                    }
-                ]
+                "role": "tool",
+                "content": str(result),
+                "tool_call_id": tool_call.id
             })
             
             try:
                 tool_response = client.messages.create(
-                    model="claude-3-5-sonnet-20240620",
+                    model=CLAUDE_MODELS[model],
                     max_tokens=4000,
-                    system=system_prompt,
                     messages=[msg for msg in conversation_history if msg.get('content')],
                     tools=tools,
-                    tool_choice={"type": "auto"}
+                    tool_choice={"type": tool_choice} if tool_choice != "tool" else {"type": "function", "function": {"name": tool_choice}}
                 )
                 
-                for tool_content_block in tool_response.content:
-                    if tool_content_block.type == "text":
-                        assistant_response += tool_content_block.text
-                        print_colored(f"\nClaude: {tool_content_block.text}", CLAUDE_COLOR)
+                for tool_content in tool_response.content:
+                    if tool_content.type == "text":
+                        assistant_response += tool_content.text
+                        print_colored(f"\nClaude: {tool_content.text}", CLAUDE_COLOR)
             except Exception as e:
-                print_colored(f"Error in tool response: {str(e)}", TOOL_COLOR)
+                print_colored(f"Error in tool response: {str(e)}", ERROR_COLOR)
                 assistant_response += "\nI encountered an error while processing the tool result. Please try again."
     
     if assistant_response:
@@ -277,42 +313,16 @@ def graceful_exit(signum, frame):
     print_colored("\nExiting Claude Engineer. Goodbye!", CLAUDE_COLOR)
     sys.exit(0)
 
-def main():
+def interactive_mode(model, tool_choice):
     if not check_api_keys():
-        sys.exit(1)
-
-    parser = argparse.ArgumentParser(description="Claude Engineer - Interact with Claude AI from the command line")
-    parser.add_argument("--query", type=str, help="Send a single query to Claude")
-    parser.add_argument("--image", type=str, help="Path to an image file to analyze")
-    
-    args = parser.parse_args()
-    
-    # Set up signal handler for graceful exit
-    signal.signal(signal.SIGINT, graceful_exit)
-    
-    try:
-        if args.query:
-            if args.image:
-                if not os.path.isfile(args.image):
-                    raise FileNotFoundError(f"Image file not found: {args.image}")
-                response = chat_with_claude(args.query, args.image)
-            else:
-                response = chat_with_claude(args.query)
-            print(response)
-        else:
-            interactive_mode()
-    except Exception as e:
-        print_colored(f"An error occurred: {str(e)}", TOOL_COLOR)
-        sys.exit(1)
-
-def interactive_mode():
-    if not check_api_keys():
-        print_colored("Error: Missing API keys. Please set the required environment variables.", TOOL_COLOR)
+        print_colored("Error: Missing API keys. Please set the required environment variables.", ERROR_COLOR)
         return
 
-    print_colored("Welcome to the Claude-3.5-Sonnet Engineer Chat with Image Support!", CLAUDE_COLOR)
+    print_colored(f"Welcome to the Claude-3 Engineer Chat (Model: {model})!", CLAUDE_COLOR)
     print_colored("Type 'exit' or press Ctrl+C to end the conversation.", CLAUDE_COLOR)
     print_colored("To include an image, type 'image' and press enter. Then enter the path to the image file.", CLAUDE_COLOR)
+    print_colored("To change the model, type 'model' and press enter. Then enter the model name (opus, sonnet, or haiku).", CLAUDE_COLOR)
+    print_colored("To change the tool choice, type 'tool_choice' and press enter. Then enter 'auto', 'any', or a specific tool name.", CLAUDE_COLOR)
     
     while True:
         try:
@@ -327,15 +337,31 @@ def interactive_mode():
                 
                 if os.path.isfile(image_path):
                     user_input = input(f"{USER_COLOR}You (prompt for image): {Style.RESET_ALL}")
-                    response = chat_with_claude(user_input, image_path)
+                    response = chat_with_claude(user_input, image_path, model, tool_choice)
                 else:
-                    print_colored("Invalid image path. Please try again.", CLAUDE_COLOR)
+                    print_colored("Invalid image path. Please try again.", ERROR_COLOR)
                     continue
+            elif user_input.lower() == 'model':
+                new_model = input(f"{USER_COLOR}Enter the model name (opus, sonnet, or haiku): {Style.RESET_ALL}").strip().lower()
+                if new_model in CLAUDE_MODELS:
+                    model = new_model
+                    print_colored(f"Model changed to: {model}", TOOL_COLOR)
+                else:
+                    print_colored("Invalid model name. Please try again.", ERROR_COLOR)
+                continue
+            elif user_input.lower() == 'tool_choice':
+                new_tool_choice = input(f"{USER_COLOR}Enter tool choice (auto, any, or a specific tool name): {Style.RESET_ALL}").strip().lower()
+                if new_tool_choice in ['auto', 'any'] or new_tool_choice in [tool['function']['name'] for tool in tools]:
+                    tool_choice = new_tool_choice
+                    print_colored(f"Tool choice changed to: {tool_choice}", TOOL_COLOR)
+                else:
+                    print_colored("Invalid tool choice. Please try again.", ERROR_COLOR)
+                continue
             else:
-                response = chat_with_claude(user_input)
+                response = chat_with_claude(user_input, model=model, tool_choice=tool_choice)
             
-            if response.startswith("Error") or response.startswith("I'm sorry"):
-                print_colored(response, TOOL_COLOR)
+            if response.startswith("Error"):
+                print_colored(response, ERROR_COLOR)
             else:
                 # Check if the response contains code and format it
                 if "```" in response:
@@ -360,6 +386,36 @@ def interactive_mode():
                     print_colored(response, CLAUDE_COLOR)
         except KeyboardInterrupt:
             graceful_exit(None, None)
+
+def main():
+    if not check_api_keys():
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(description="Claude Engineer - Interact with Claude AI from the command line")
+    parser.add_argument("--query", type=str, help="Send a single query to Claude")
+    parser.add_argument("--image", type=str, help="Path to an image file to analyze")
+    parser.add_argument("--model", type=str, choices=list(CLAUDE_MODELS.keys()), default=DEFAULT_MODEL, help="Choose the Claude model to use")
+    parser.add_argument("--tool_choice", type=str, default="auto", help="Set the tool choice (auto, any, or a specific tool name)")
+    
+    args = parser.parse_args()
+    
+    # Set up signal handler for graceful exit
+    signal.signal(signal.SIGINT, graceful_exit)
+    
+    try:
+        if args.query:
+            if args.image:
+                if not os.path.isfile(args.image):
+                    raise FileNotFoundError(f"Image file not found: {args.image}")
+                response = chat_with_claude(args.query, args.image, args.model, args.tool_choice)
+            else:
+                response = chat_with_claude(args.query, model=args.model, tool_choice=args.tool_choice)
+            print(response)
+        else:
+            interactive_mode(args.model, args.tool_choice)
+    except Exception as e:
+        print_colored(f"An error occurred: {str(e)}", ERROR_COLOR)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
