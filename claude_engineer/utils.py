@@ -14,6 +14,7 @@ USER_COLOR = Fore.WHITE
 CLAUDE_COLOR = Fore.BLUE
 TOOL_COLOR = Fore.YELLOW
 RESULT_COLOR = Fore.GREEN
+ERROR_COLOR = Fore.RED 
 
 def print_colored(text, color):
     print(f"{color}{text}{Style.RESET_ALL}")
