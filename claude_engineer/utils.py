@@ -8,6 +8,8 @@ from pygments.lexers import get_lexer_by_name
 from pygments.formatters import TerminalFormatter
 import pygments.util
 from bs4 import BeautifulSoup
+import PyPDF2
+from tavily import TavilyClient
 
 # Color constants
 USER_COLOR = Fore.WHITE
@@ -15,6 +17,9 @@ CLAUDE_COLOR = Fore.BLUE
 TOOL_COLOR = Fore.YELLOW
 RESULT_COLOR = Fore.GREEN
 ERROR_COLOR = Fore.RED 
+
+def print_colored(text, color):
+    print(f"{color}{text}{Style.RESET_ALL}")
 
 def print_colored(text, color):
     print(f"{color}{text}{Style.RESET_ALL}")
@@ -121,3 +126,12 @@ def encode_image_to_base64(image_path):
             return base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
     except Exception as e:
         return f"Error encoding image: {str(e)}"
+    
+def tavily_search(query):
+    try:
+        # Initialize the Tavily client
+        tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+        response = tavily.qna_search(query=query, search_depth="advanced")
+        return response
+    except Exception as e:
+        return f"Error performing search: {str(e)}"

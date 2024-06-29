@@ -4,13 +4,11 @@ import sys
 import json
 from dotenv import load_dotenv
 from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
-from tavily import TavilyClient
 from colorama import init, Style
 import signal
-
-# Import helper functions and constants
+import re
 from .utils import (
-    print_colored, print_code, create_folder, create_file,
+    print_colored, print_code, create_folder, create_file, tavily_search,
     write_to_file, read_file, list_files, encode_image_to_base64,
     USER_COLOR, CLAUDE_COLOR, TOOL_COLOR, RESULT_COLOR, ERROR_COLOR
 )
@@ -24,11 +22,14 @@ load_dotenv()
 # Initialize the Anthropic client
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# Initialize the Tavily client
-tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-
 # Set up the conversation memory
 conversation_history = []
+
+# Add these constants at the top of the file
+CONTINUATION_EXIT_PHRASE = "AUTOMODE_COMPLETE"
+MAX_CONTINUATION_ITERATIONS = 25
+# automode flag
+automode = False
 
 # Available Claude models
 CLAUDE_MODELS = {
@@ -43,6 +44,7 @@ DEFAULT_MODEL = "sonnet"
 # System prompt
 system_prompt = """
 You are Claude, an AI assistant powered by Anthropic's Claude-3.5-Sonnet model. You are an exceptional software developer with vast knowledge across multiple programming languages, frameworks, and best practices. Your capabilities include:
+
 1. Creating project structures, including folders and files
 2. Writing clean, efficient, and well-documented code
 3. Debugging complex issues and providing detailed explanations
@@ -52,38 +54,48 @@ You are Claude, an AI assistant powered by Anthropic's Claude-3.5-Sonnet model. 
 7. Listing files in the root directory of the project
 8. Performing web searches to get up-to-date information or additional context
 9. When you use search make sure you use the best query to get the most accurate and up-to-date information
-10. You NEVER remove existing code if doesnt require to be changed or removed, never use comments  like # ... (keep existing code) ... or # ... (rest of the code) ... etc, you only add new code or remove it.
+10. IMPORTANT!! You NEVER remove existing code if doesnt require to be changed or removed, never use comments  like # ... (keep existing code) ... or # ... (rest of the code) ... etc, you only add new code or remove it or EDIT IT.
 11. Analyzing images provided by the user
 When an image is provided, carefully analyze its contents and incorporate your observations into your responses.
+
 When asked to create a project:
 - Always start by creating a root folder for the project.
 - Then, create the necessary subdirectories and files within that root folder.
 - Organize the project structure logically and follow best practices for the specific type of project being created.
 - Use the provided tools to create folders and files as needed.
+
 When asked to make edits or improvements:
 - Use the read_file tool to examine the contents of existing files.
 - Analyze the code and suggest improvements or make necessary edits.
 - Use the write_to_file tool to implement changes.
+
 Be sure to consider the type of project (e.g., Python, JavaScript, web application) when determining the appropriate structure and files to include.
+
 You can now read files, list the contents of the root folder where this script is being run, and perform web searches. Use these capabilities when:
 - The user asks for edits or improvements to existing files
 - You need to understand the current state of the project
 - You believe reading a file or listing directory contents will be beneficial to accomplish the user's goal
 - You need up-to-date information or additional context to answer a question accurately
+
 When you need current information or feel that a search could provide a better answer, use the tavily_search tool. This tool performs a web search and returns a concise answer along with relevant sources.
+
 Always strive to provide the most accurate, helpful, and detailed responses possible. If you're unsure about something, admit it and consider using the search tool to find the most current information.
-Answer the user's request using relevant tools (if they are available). Before calling a tool, do some analysis within \\<thinking>\\</thinking> tags. First, think about which of the provided tools is the 
-relevant tool to answer the user's request. Second, go through each of the required parameters of the relevant tool and determine if the user has directly provided or given enough information to infer a value. 
-When deciding if the parameter can be inferred, carefully consider all the context to see if it supports a specific value. If all of the required parameters are present or can be reasonably inferred, close the 
-thinking tag and proceed with the tool call. BUT, if one of the values for a required parameter is missing, DO NOT invoke the function (not even with fillers for the missing params) and instead, ask the user 
-to provide the missing parameters. DO NOT ask for more information on optional parameters if it is not provided.
+
+{automode_status}
+
+When in automode:
+1. Set clear, achievable goals for yourself based on the user's request
+2. Work through these goals one by one, using the available tools as needed
+3. REMEMBER!! You can Read files, write code, LIST the files, and even SEARCH and make edits, use these tools as necessary to accomplish each goal
+4. ALWAYS READ A FILE BEFORE EDITING IT IF YOU ARE MISSING CONTENT. Provide regular updates on your progress
+5. IMPORTANT RULe!! When you know your goals are completed, DO NOT CONTINUE IN POINTLESS BACK AND FORTH CONVERSATIONS with yourself, if you think we achieved the results established to the original request say "AUTOMODE_COMPLETE" in your response to exit the loop!
+6. ULTRA IMPORTANT! You have access to this {iteration_info} amount of iterations you have left to complete the request, you can use this information to make decisions and to provide updates on your progress knowing the amount of responses you have left to complete the request.
+Answer the user's request using relevant tools (if they are available). Before calling a tool, do some analysis within <thinking></thinking> tags. First, think about which of the provided tools is the relevant tool to answer the user's request. Second, go through each of the required parameters of the relevant tool and determine if the user has directly provided or given enough information to infer a value. When deciding if the parameter can be inferred, carefully consider all the context to see if it supports a specific value. If all of the required parameters are present or can be reasonably inferred, close the thinking tag and proceed with the tool call. BUT, if one of the values for a required parameter is missing, DO NOT invoke the function (not even with fillers for the missing params) and instead, ask the user to provide the missing parameters. DO NOT ask for more information on optional parameters if it is not provided.
+
 """
 
 # Initialize the Anthropic client
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-# Initialize the Tavily client
-tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 # Set up the conversation memory
 conversation_history = []
@@ -218,23 +230,61 @@ def execute_tool(tool_name, tool_args):
     print_colored(f"Tool execution result: {result}", RESULT_COLOR)
     return result
 
-def tavily_search(query):
-    try:
-        response = tavily.qna_search(query=query, search_depth="advanced")
-        return response
-    except Exception as e:
-        return f"Error performing search: {str(e)}"
+def parse_goals(response):
+    goals = re.findall(r'Goal \d+: (.+)', response)
+    return goals
 
-def chat_with_claude(user_input, image_path=None):
-    global conversation_history
+def execute_goals(goals):
+    global automode
+    for i, goal in enumerate(goals, 1):
+        print_colored(f"\nExecuting Goal {i}: {goal}", TOOL_COLOR)
+        response, _ = chat_with_claude(f"Continue working on goal: {goal}")
+        if CONTINUATION_EXIT_PHRASE in response:
+            automode = False
+            print_colored("Exiting automode.", TOOL_COLOR)
+            break
+
+def update_system_prompt(current_iteration=None, max_iterations=None):
+    global system_prompt
+    automode_status = "You are currently in automode." if automode else "You are not in automode."
+    iteration_info = ""
+    if current_iteration is not None and max_iterations is not None:
+        iteration_info = f"You are currently on iteration {current_iteration} out of {max_iterations} in automode."
+    return system_prompt.format(automode_status=automode_status, iteration_info=iteration_info)
+
+def process_and_display_response(response):
+    if response.startswith("Error") or response.startswith("I'm sorry"):
+        print_colored(response, TOOL_COLOR)
+    else:
+        if "```" in response:
+            parts = response.split("```")
+            for i, part in enumerate(parts):
+                if i % 2 == 0:
+                    print_colored(part, CLAUDE_COLOR)
+                else:
+                    lines = part.split('\n')
+                    language = lines[0].strip() if lines else ""
+                    code = '\n'.join(lines[1:]) if len(lines) > 1 else ""
+                    
+                    if language and code:
+                        print_code(code, language)
+                    elif code:
+                        print_colored(f"Code:\n{code}", CLAUDE_COLOR)
+                    else:
+                        print_colored(part, CLAUDE_COLOR)
+        else:
+            print_colored(response, CLAUDE_COLOR)
+
+def chat_with_claude(user_input, image_path=None, current_iteration=None, max_iterations=None):
+    global conversation_history, automode
     
     if image_path:
         print_colored(f"Processing image at path: {image_path}", TOOL_COLOR)
         image_base64 = encode_image_to_base64(image_path)
         
         if image_base64.startswith("Error"):
-            print_colored(f"Error encoding image: {image_base64}", ERROR_COLOR)
-            return "I'm sorry, there was an error processing the image. Please try again."
+            print_colored(f"Error encoding image: {image_base64}", TOOL_COLOR)
+            return "I'm sorry, there was an error processing the image. Please try again.", False
 
         image_message = {
             "role": "user",
@@ -262,61 +312,88 @@ def chat_with_claude(user_input, image_path=None):
     
     try:
         response = client.messages.create(
-            model="claude-3-sonnet-20240229",
+            model="claude-3-5-sonnet-20240620",
             max_tokens=4000,
-            system=system_prompt,
+            system=update_system_prompt(current_iteration, max_iterations),
             messages=messages,
             tools=tools,
             tool_choice={"type": "auto"}
         )
     except Exception as e:
-        print_colored(f"Error calling Claude API: {str(e)}", ERROR_COLOR)
-        return "I'm sorry, there was an error communicating with the AI. Please try again."
+        print_colored(f"Error calling Claude API: {str(e)}", TOOL_COLOR)
+        return "I'm sorry, there was an error communicating with the AI. Please try again.", False
     
     assistant_response = ""
+    exit_continuation = False
     
-    for content in response.content:
-        if content.type == "text":
-            assistant_response += content.text
-            print_colored(f"\nClaude: {content.text}", CLAUDE_COLOR)
-        elif content.type == "tool_calls":
-            for tool_call in content.tool_calls:
-                tool_name = tool_call.function.name
-                tool_args = json.loads(tool_call.function.arguments)
+    for content_block in response.content:
+        if content_block.type == "text":
+            assistant_response += content_block.text
+            print_colored(f"\nClaude: {content_block.text}", CLAUDE_COLOR)
+            if CONTINUATION_EXIT_PHRASE in content_block.text:
+                exit_continuation = True
+        elif content_block.type == "tool_use":
+            tool_name = content_block.name
+            tool_input = content_block.input
+            tool_use_id = content_block.id
+            
+            print_colored(f"\nTool Used: {tool_name}", TOOL_COLOR)
+            print_colored(f"Tool Input: {tool_input}", TOOL_COLOR)
+            
+            result = execute_tool(tool_name, tool_input)
+            print_colored(f"Tool Result: {result}", RESULT_COLOR)
+            
+            conversation_history.append({"role": "assistant", "content": [content_block]})
+            conversation_history.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": result
+                    }
+                ]
+            })
+            
+            try:
+                tool_response = client.messages.create(
+                    model="claude-3-5-sonnet-20240620",
+                    max_tokens=4000,
+                    system=update_system_prompt(current_iteration, max_iterations),
+                    messages=[msg for msg in conversation_history if msg.get('content')],
+                    tools=tools,
+                    tool_choice={"type": "auto"}
+                )
                 
-                print_colored(f"\nExecuting Tool: {tool_name}", TOOL_COLOR)
-                print_colored(f"Tool Arguments: {tool_args}", TOOL_COLOR)
-                
-                result = execute_tool(tool_name, tool_args)
-                print_colored(f"Tool Result: {result}", RESULT_COLOR)
-                
-                assistant_response += f"\nI've used the {tool_name} tool. {result}"
-                
-                conversation_history.append({
-                    "role": "tool",
-                    "content": str(result),
-                    "tool_call_id": tool_call.id
-                })
+                for tool_content_block in tool_response.content:
+                    if tool_content_block.type == "text":
+                        assistant_response += tool_content_block.text
+                        print_colored(f"\nClaude: {tool_content_block.text}", CLAUDE_COLOR)
+            except Exception as e:
+                print_colored(f"Error in tool response: {str(e)}", TOOL_COLOR)
+                assistant_response += "\nI encountered an error while processing the tool result. Please try again."
     
     if assistant_response:
         conversation_history.append({"role": "assistant", "content": assistant_response})
     
-    return assistant_response
+    return assistant_response, exit_continuation
 
 def signal_handler(sig, frame):
-    print_colored("\nGracefully exiting. Thank you for using Claude Engineer!", CLAUDE_COLOR)
+    print_colored("\nExiting gracefully...", TOOL_COLOR)
     sys.exit(0)
 
-def interactive_mode():
-    print_colored("Welcome to the Claude-3 Engineer Chat!", CLAUDE_COLOR)
-    print_colored("Type 'exit' or press Ctrl+C to end the conversation.", CLAUDE_COLOR)
-    print_colored("Available tools: create_folder, create_file, write_to_file, read_file, list_files, tavily_search", TOOL_COLOR)
-    print_colored("You can use tools directly by typing the tool name followed by JSON arguments.", TOOL_COLOR)
-    print_colored("Example: create_folder {\"path\": \"my_project\"}", TOOL_COLOR)
-    print_colored("To include an image, type 'image' and press enter. Then provide the image path.", TOOL_COLOR)
+def main():
+    global automode
+    signal.signal(signal.SIGINT, signal_handler)
     
-    while True:
-        try:
+    print_colored("Welcome to the Claude-3.5-Sonnet Engineer Chat with Image Support!", CLAUDE_COLOR)
+    print_colored("Type 'exit' to end the conversation.", CLAUDE_COLOR)
+    print_colored("Type 'image' to include an image in your message.", CLAUDE_COLOR)
+    print_colored("Type 'automode [number]' to enter Autonomous mode with a specific number of iterations.", CLAUDE_COLOR)
+    print_colored("Press Ctrl+C at any time to exit the program.", CLAUDE_COLOR)
+    
+    try:
+        while True:
             user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
             
             if user_input.lower() == 'exit':
@@ -324,68 +401,54 @@ def interactive_mode():
                 break
             
             if user_input.lower() == 'image':
-                image_path = input(f"{USER_COLOR}Enter the path to your image file: {Style.RESET_ALL}").strip()
+                image_path = input(f"{USER_COLOR}Drag and drop your image here: {Style.RESET_ALL}").strip().replace("'", "")
                 
                 if os.path.isfile(image_path):
                     user_input = input(f"{USER_COLOR}You (prompt for image): {Style.RESET_ALL}")
-                    response = chat_with_claude(user_input, image_path)
+                    response, _ = chat_with_claude(user_input, image_path)
+                    process_and_display_response(response)
                 else:
-                    print_colored("Invalid image path. Please try again.", ERROR_COLOR)
-                    continue
-            elif user_input.lower().startswith(('create_folder', 'create_file', 'write_to_file', 'read_file', 'list_files', 'tavily_search')):
-                try:
-                    parts = user_input.split(maxsplit=1)
-                    tool_name = parts[0]
-                    tool_args = json.loads(parts[1]) if len(parts) > 1 else {}
-                    result = execute_tool(tool_name, tool_args)
-                    print_colored(f"Tool Result: {result}", RESULT_COLOR)
-                    conversation_history.append({"role": "user", "content": f"I used the {tool_name} tool with arguments: {tool_args}"})
-                    conversation_history.append({"role": "assistant", "content": f"The result of using the {tool_name} tool was: {result}"})
-                except json.JSONDecodeError:
-                    print_colored("Invalid JSON format for tool arguments. Please try again.", ERROR_COLOR)
-                except Exception as e:
-                    print_colored(f"Error executing tool: {str(e)}", ERROR_COLOR)
-            else:
-                response = chat_with_claude(user_input)
+                    print_colored("Invalid image path. Please try again.", CLAUDE_COLOR)
+                continue
+            
+            if user_input.lower().startswith('automode'):
+                parts = user_input.split()
+                max_iterations = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else MAX_CONTINUATION_ITERATIONS
                 
-                # Check if Claude didn't use a tool but the user wanted to create a folder
-                if "create a folder" in user_input.lower() and "create_folder" not in response:
-                    folder_name = user_input.lower().split("named")[-1].strip()
-                    print_colored(f"\nClaude didn't explicitly create the folder. Let me do that for you.", TOOL_COLOR)
-                    result = execute_tool("create_folder", {"path": folder_name})
-                    print_colored(f"Tool Result: {result}", RESULT_COLOR)
+                print_colored(f"Entering automode with {max_iterations} iterations. Press Ctrl+C to exit automode at any time.", TOOL_COLOR)
+                automode = True
                 
-                if "```" in response:
-                    parts = response.split("```")
-                    for i, part in enumerate(parts):
-                        if i % 2 == 0:
-                            print_colored(part, CLAUDE_COLOR)
-                        else:
-                            lines = part.split('\n')
-                            language = lines[0].strip() if lines else ""
-                            code = '\n'.join(lines[1:]) if len(lines) > 1 else ""
-                            
-                            if language and code:
-                                print_code(code, language)
-                            elif code:
-                                print_colored(f"Code:\n{code}", CLAUDE_COLOR)
-                            else:
-                                print_colored(part, CLAUDE_COLOR)
-                else:
-                    print_colored(response, CLAUDE_COLOR)
-        except KeyboardInterrupt:
-            print_colored("\nGracefully exiting. Thank you for using Claude Engineer!", CLAUDE_COLOR)
-            break
-
-def main():
-    # Set up signal handler
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    try:
-        interactive_mode()
+                user_input = input(f"\n{USER_COLOR}You (initial automode query): {Style.RESET_ALL}")
+                
+                for iteration in range(max_iterations):
+                    try:
+                        response, exit_continuation = chat_with_claude(user_input, current_iteration=iteration+1, max_iterations=max_iterations)
+                        process_and_display_response(response)
+                        
+                        if exit_continuation or CONTINUATION_EXIT_PHRASE in response:
+                            print_colored("Automode completed.", TOOL_COLOR)
+                            break
+                        
+                        print_colored(f"Continuation iteration {iteration + 1} completed.", TOOL_COLOR)
+                        user_input = "Continue with the next step."
+                        
+                    except KeyboardInterrupt:
+                        print_colored("\nAutomode interrupted by user. Exiting automode.", TOOL_COLOR)
+                        break
+                
+                automode = False
+                print_colored("Exited automode. Returning to regular chat.", TOOL_COLOR)
+                continue
+            
+            response, _ = chat_with_claude(user_input)
+            process_and_display_response(response)
+            
+    except KeyboardInterrupt:
+        print_colored("\nExiting gracefully...", TOOL_COLOR)
     except Exception as e:
         print_colored(f"An unexpected error occurred: {str(e)}", ERROR_COLOR)
-        sys.exit(1)
+    finally:
+        print_colored("Thank you for using Claude Engineer. Goodbye!", CLAUDE_COLOR)
 
 if __name__ == "__main__":
     main()
