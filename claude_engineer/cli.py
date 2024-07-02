@@ -383,72 +383,81 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 def main():
-    global automode
     signal.signal(signal.SIGINT, signal_handler)
-    
+
+    global automode, conversation_history
     print_colored("Welcome to the Claude-3.5-Sonnet Engineer Chat with Image Support!", CLAUDE_COLOR)
     print_colored("Type 'exit' to end the conversation.", CLAUDE_COLOR)
     print_colored("Type 'image' to include an image in your message.", CLAUDE_COLOR)
     print_colored("Type 'automode [number]' to enter Autonomous mode with a specific number of iterations.", CLAUDE_COLOR)
-    print_colored("Press Ctrl+C at any time to exit the program.", CLAUDE_COLOR)
+    print_colored("While in automode, press Ctrl+C at any time to exit the automode to return to regular chat.", CLAUDE_COLOR)
     
-    try:
-        while True:
-            user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
+    while True:
+        user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
+        
+        if user_input.lower() == 'exit':
+            print_colored("Thank you for chatting. Goodbye!", CLAUDE_COLOR)
+            break
+        
+        if user_input.lower() == 'image':
+            image_path = input(f"{USER_COLOR}Drag and drop your image here: {Style.RESET_ALL}").strip().replace("'", "")
             
-            if user_input.lower() == 'exit':
-                print_colored("Thank you for chatting. Goodbye!", CLAUDE_COLOR)
-                break
-            
-            if user_input.lower() == 'image':
-                image_path = input(f"{USER_COLOR}Drag and drop your image here: {Style.RESET_ALL}").strip().replace("'", "")
-                
-                if os.path.isfile(image_path):
-                    user_input = input(f"{USER_COLOR}You (prompt for image): {Style.RESET_ALL}")
-                    response, _ = chat_with_claude(user_input, image_path)
-                    process_and_display_response(response)
-                else:
-                    print_colored("Invalid image path. Please try again.", CLAUDE_COLOR)
+            if os.path.isfile(image_path):
+                user_input = input(f"{USER_COLOR}You (prompt for image): {Style.RESET_ALL}")
+                response, _ = chat_with_claude(user_input, image_path)
+                process_and_display_response(response)
+            else:
+                print_colored("Invalid image path. Please try again.", CLAUDE_COLOR)
                 continue
-            
-            if user_input.lower().startswith('automode'):
+        elif user_input.lower().startswith('automode'):
+            try:
                 parts = user_input.split()
-                max_iterations = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else MAX_CONTINUATION_ITERATIONS
+                if len(parts) > 1 and parts[1].isdigit():
+                    max_iterations = int(parts[1])
+                else:
+                    max_iterations = MAX_CONTINUATION_ITERATIONS
                 
-                print_colored(f"Entering automode with {max_iterations} iterations. Press Ctrl+C to exit automode at any time.", TOOL_COLOR)
                 automode = True
+                print_colored(f"Entering automode with {max_iterations} iterations. Press Ctrl+C to exit automode at any time.", TOOL_COLOR)
+                print_colored("Press Ctrl+C at any time to exit the automode loop.", TOOL_COLOR)
+                user_input = input(f"\n{USER_COLOR}You: {Style.RESET_ALL}")
                 
-                user_input = input(f"\n{USER_COLOR}You (initial automode query): {Style.RESET_ALL}")
-                
-                for iteration in range(max_iterations):
-                    try:
-                        response, exit_continuation = chat_with_claude(user_input, current_iteration=iteration+1, max_iterations=max_iterations)
+                iteration_count = 0
+                try:
+                    while automode and iteration_count < max_iterations:
+                        response, exit_continuation = chat_with_claude(user_input, current_iteration=iteration_count+1, max_iterations=max_iterations)
                         process_and_display_response(response)
                         
                         if exit_continuation or CONTINUATION_EXIT_PHRASE in response:
                             print_colored("Automode completed.", TOOL_COLOR)
-                            break
+                            automode = False
+                        else:
+                            print_colored(f"Continuation iteration {iteration_count + 1} completed.", TOOL_COLOR)
+                            print_colored("Press Ctrl+C to exit automode.", TOOL_COLOR)
+                            user_input = "Continue with the next step."
                         
-                        print_colored(f"Continuation iteration {iteration + 1} completed.", TOOL_COLOR)
-                        user_input = "Continue with the next step."
+                        iteration_count += 1
                         
-                    except KeyboardInterrupt:
-                        print_colored("\nAutomode interrupted by user. Exiting automode.", TOOL_COLOR)
-                        break
-                
+                        if iteration_count >= max_iterations:
+                            print_colored("Max iterations reached. Exiting automode.", TOOL_COLOR)
+                            automode = False
+                except KeyboardInterrupt:
+                    print_colored("\nAutomode interrupted by user. Exiting automode.", TOOL_COLOR)
+                    automode = False
+                    # Ensure the conversation history ends with an assistant message
+                    if conversation_history and conversation_history[-1]["role"] == "user":
+                        conversation_history.append({"role": "assistant", "content": "Automode interrupted. How can I assist you further?"})
+            except KeyboardInterrupt:
+                print_colored("\nAutomode interrupted by user. Exiting automode.", TOOL_COLOR)
                 automode = False
-                print_colored("Exited automode. Returning to regular chat.", TOOL_COLOR)
-                continue
+                # Ensure the conversation history ends with an assistant message
+                if conversation_history and conversation_history[-1]["role"] == "user":
+                    conversation_history.append({"role": "assistant", "content": "Automode interrupted. How can I assist you further?"})
             
+            print_colored("Exited automode. Returning to regular chat.", TOOL_COLOR)
+        else:
             response, _ = chat_with_claude(user_input)
             process_and_display_response(response)
-            
-    except KeyboardInterrupt:
-        print_colored("\nExiting gracefully...", TOOL_COLOR)
-    except Exception as e:
-        print_colored(f"An unexpected error occurred: {str(e)}", ERROR_COLOR)
-    finally:
-        print_colored("Thank you for using Claude Engineer. Goodbye!", CLAUDE_COLOR)
 
 if __name__ == "__main__":
     main()
